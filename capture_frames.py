@@ -24,8 +24,8 @@ os.makedirs(CAPTURE_DIR, exist_ok=True)
 
 def capture_frame_and_save():
     init = sl.InitParameters()
-    init.camera_fps = 15
-    init.camera_resolution = sl.RESOLUTION.HD1080
+    init.camera_fps = 30
+    init.camera_resolution = sl.RESOLUTION.HD720
     init.depth_mode = sl.DEPTH_MODE.NEURAL_PLUS
     init.coordinate_units = sl.UNIT.METER
     init.depth_minimum_distance = 0.1  # meters
@@ -42,13 +42,11 @@ def capture_frame_and_save():
     print("ZED opened. Press 'd' in the live window to capture a frame, or 'q' to exit.")
 
     runtime = sl.RuntimeParameters()
-    runtime.confidence_threshold = 95
+    runtime.confidence_threshold = 100
     
-    # positional_tracking_params = sl.PositionalTrackingParameters()
-    # positional_tracking_params.set_as_static = True
-
     image = sl.Mat()
     depth = sl.Mat()
+    confidence = sl.Mat()  # Add confidence map
 
     win_name = "ZED Live"
     cv2.namedWindow(win_name, cv2.WINDOW_NORMAL)
@@ -59,11 +57,13 @@ def capture_frame_and_save():
             if cam.grab(runtime) == sl.ERROR_CODE.SUCCESS:
                 cam.retrieve_image(image, sl.VIEW.LEFT)
                 cam.retrieve_measure(depth, sl.MEASURE.DEPTH)
+                cam.retrieve_measure(confidence, sl.MEASURE.CONFIDENCE)  # Retrieve confidence map
 
                 img = np.asarray(image.get_data())
                 if img.shape[2] == 4:
                     img = img[:, :, :3]
                 depth_arr = np.asarray(depth.get_data())
+                confidence_arr = np.asarray(confidence.get_data())  # Convert confidence map to numpy
 
                 # --- Depth visualization ---
                 depth_disp = np.copy(depth_arr)
@@ -93,10 +93,19 @@ def capture_frame_and_save():
                     rgb_path = os.path.join(CAPTURE_DIR, f"rgb_{ts}.png")
                     depth_path = os.path.join(CAPTURE_DIR, f"depth_{ts}.npy")
                     intr_path = os.path.join(CAPTURE_DIR, f"intrinsics_{ts}.npy")
+                    conf_path = os.path.join(CAPTURE_DIR, f"confidence_{ts}.npy")
 
                     cv2.imwrite(rgb_path, img)
                     np.save(depth_path, depth_arr)
+                    np.save(conf_path, confidence_arr)
 
+                    # Display confidence as grayscale: white = high confidence, black = low
+                    conf_gray = np.clip(confidence_arr, 0, 100)
+                    conf_gray = (conf_gray * 255 / 100).astype(np.uint8)
+                    cv2.imshow("Confidence (Grayscale)", conf_gray)
+                    print("Confidence map displayed. Press any key to continue...")
+                    cv2.waitKey(0)
+                    cv2.destroyWindow("Confidence (Grayscale)")
                     cam_info = cam.get_camera_information()
                     calib = cam_info.camera_configuration.calibration_parameters
                     left_cam = calib.left_cam

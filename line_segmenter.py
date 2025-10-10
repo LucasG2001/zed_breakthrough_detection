@@ -228,9 +228,10 @@ class BrushSegmenter:
 def main():
     print("Starting 3D segmentation + line fitting + depth reconstruction")
 
-    rgb_path = os.path.join(CAPTURE_DIR, "rgb_1759840630.png")
-    depth_path = os.path.join(CAPTURE_DIR, "depth_1759840630.npy")
-    intr_path = os.path.join(CAPTURE_DIR, "intrinsics_1759840630.npy")
+    rgb_path = os.path.join(CAPTURE_DIR, "rgb_1759998727.png")
+    depth_path = os.path.join(CAPTURE_DIR, "depth_1759998727.npy")
+    intr_path = os.path.join(CAPTURE_DIR, "intrinsics_1759998727.npy")
+
 
     img = cv2.imread(rgb_path)
     if img is None:

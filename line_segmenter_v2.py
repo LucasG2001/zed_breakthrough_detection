@@ -308,9 +308,9 @@ def make_lineset(line_pts, color=[1.0, 0.0, 0.0]):
 def main():
     print("Loading saved ZED RGB + Depth + Intrinsics...")
     # adjust paths to your files
-    rgb_path = os.path.join(CAPTURE_DIR, "rgb_1759828157.png")
-    depth_path = os.path.join(CAPTURE_DIR, "depth_1759828157.npy")
-    intr_path = os.path.join(CAPTURE_DIR, "intrinsics_1759828157.npy")
+    rgb_path = os.path.join(CAPTURE_DIR, "rgb_1759998727.png")
+    depth_path = os.path.join(CAPTURE_DIR, "depth_1759998727.npy")
+    intr_path = os.path.join(CAPTURE_DIR, "intrinsics_1759998727.npy")
 
     if not (os.path.exists(rgb_path) and os.path.exists(depth_path) and os.path.exists(intr_path)):
         print("Files not found. Please place rgb, depth, intrinsics in", CAPTURE_DIR)
