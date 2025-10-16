@@ -4,6 +4,7 @@ import open3d as o3d
 import os
 from line_segmenter_v2 import make_pcd
 from constrained_fit import fit_3d_line_with_pixel_constraint_v2
+from load_svos import  list_svos, load_from_svo
 CAPTURE_DIR = "zed_captures"
 
 def project_3d_to_pixel(pt3d, fx, fy, cx, cy):
@@ -237,7 +238,8 @@ def visualize_all(points_orig, colors_orig, centroids, directions, fitted_points
     print("Created line set — ready to visualize")
 
     # ---------------- Visualize ----------------
-    o3d.visualization.draw_geometries([pcd_full, pcd_fitted, pcd_special] + line_sets, window_name="All Point Cloud")
+    o3d.visualization.draw_geometries([pcd_full, pcd_fitted] + line_sets[0:2], window_name="All Point Cloud without fitted line")
+    o3d.visualization.draw_geometries([pcd_full, pcd_fitted] + line_sets, window_name="All Point Cloud")
 
 
 # ---------- SEGMENTATION ----------
@@ -361,23 +363,16 @@ def show_depth_image(depth):
      cv2.waitKey(1)
 
 # ---------- MAIN ----------
-def compute_overshoot(timestamp):
+def compute_overshoot(svo_path):
     # Load data
-    rgb_path = os.path.join(CAPTURE_DIR, f"rgb_{timestamp}.png")
-    depth_path = os.path.join(CAPTURE_DIR, f"depth_{timestamp}.npy")
-    intr_path = os.path.join(CAPTURE_DIR, f"intrinsics_{timestamp}.npy")
-    conf_path = os.path.join(CAPTURE_DIR, f"confidence_{timestamp}.npy")
+    img, depth, intr, conf = load_from_svo(svo_path)
 
-    img = cv2.imread(rgb_path)
-    depth = np.load(depth_path)
-    intr = np.load(intr_path)
-    conf = np.load(conf_path)
-    
-    # show_depth_image(depth)
-
-    # Extract original points/colorssss
+    # Extract original points/colors
     fx, fy, cx, cy = intr
     points_orig, colors_orig = rgbd_to_points(img, depth, intr)
+    pc = make_pcd(points_orig, colors_orig)
+    # o3d.visualization.draw_geometries([pc])
+    
 
     # Pass confidence to segmenter
     seg = SimpleBrushSegmenter(img, depth, intr, conf=conf)
@@ -405,25 +400,22 @@ def compute_overshoot(timestamp):
 
     centroid_pca, direction_pca = fit_line_pca(pts)
     centroid_weighted, direction_weighted = fit_line_pca_weighted(pts, confidences)
-   
+    constrained_line = fit_3d_line_with_pixel_constraint_v2(pts, confidences, special_points[0], special_points[1],
+                                            fx, fy, cx, cy,
+                                            target_distance_mm=122.0, maxiter=100000)
+    
+    centroid_constrained = constrained_line['p0']
+    direction_constrained = constrained_line['v']
 
     # Backproject 2D → 3D
     # Project onto fitted line
     projectd_pca = np.array([project_pixel_on_line(p, intr, centroid_pca, direction_pca) for p in special_points])
     projected_weighted = np.array([project_pixel_on_line(p, intr, centroid_weighted, direction_weighted) for p in special_points])
-
-    constrained_line = fit_3d_line_with_pixel_constraint_v2(pts, confidences, special_points[0], special_points[1],
-                                            fx, fy, cx, cy,
-                                            target_distance_mm=145.0, maxiter=10000)
-    
-    print(constrained_line)
-    
-    centroid_contrained = constrained_line['p0']
-    direction_contrained = constrained_line['v']
-    
-    projected_constrained = np.array([project_pixel_on_line(p, intr, centroid_contrained, direction_contrained) for p in special_points])
-    projected_exit_point = np.array([project_pixel_on_line(p, intr, centroid_contrained, direction_contrained) for p in exit_point])
-    print("Projected exit point:", projected_exit_point)
+    projected_constrained = np.array([project_pixel_on_line(p, intr, centroid_constrained, direction_constrained) for p in special_points])
+    #exit points
+    projected_exit_point_constrained = np.array([project_pixel_on_line(p, intr, centroid_constrained, direction_constrained) for p in exit_point])
+    projected_exit_point_pca = np.array([project_pixel_on_line(p, intr, centroid_pca, direction_pca) for p in exit_point])
+    projected_exit_point_weighted = np.array([project_pixel_on_line(p, intr, centroid_weighted, direction_weighted) for p in exit_point])
 
     drill_tip_contstrained = projected_constrained[1 if special_points[0][1] < special_points[1][1] else 0]
     drill_tip_pca = projectd_pca[1 if special_points[0][1] < special_points[1][1] else 0]
@@ -437,12 +429,12 @@ def compute_overshoot(timestamp):
     # print(f"Distance between the two special points (Weighted PCA): {dist_weighted:.2f} mm")
     dist_mm = np.linalg.norm(projected_constrained[0] - projected_constrained[1]) * 1000
     # print(f"Distance between the two special points (projected): {dist_mm:.2f} mm")
-    soft_tissue_penetration_mm_constrained = np.linalg.norm(drill_tip_contstrained - projected_exit_point) * 1000
-    soft_tissue_penetration_mm_weighted = np.linalg.norm(drill_tip_weighted - projected_exit_point) * 1000
-    soft_tissue_penetration_mm_pca = np.linalg.norm(drill_tip_pca - projected_exit_point) * 1000
+    soft_tissue_penetration_mm_constrained = np.linalg.norm(drill_tip_contstrained - projected_exit_point_constrained) * 1000
+    soft_tissue_penetration_mm_weighted = np.linalg.norm(drill_tip_weighted - projected_exit_point_weighted) * 1000
+    soft_tissue_penetration_mm_pca = np.linalg.norm(drill_tip_pca - projected_exit_point_pca) * 1000
 
-    centroids = [centroid_contrained, centroid_weighted, centroid_pca]
-    directions = [direction_contrained, direction_weighted, direction_pca]
+    centroids = [centroid_constrained, centroid_weighted, centroid_pca]
+    directions = [direction_constrained, direction_weighted, direction_pca]
 
     visualize_all(points_orig, colors_orig, centroids, directions, pts, projected_constrained)
 
@@ -461,19 +453,27 @@ if __name__ == "__main__":
     # TODO: visualize different lines
     # TODO: erode edges of mask
     # DONE: segment third points
-    # TODO: why is the computed overshooot so wrong?
+    # DONE: why is the computed overshooot so wrong?
 
-    timestamps = ["1760020318"]  # Replace with your actual timestamp
-    #compute_overshoot(timestamp)
-    # timestamps = ["1760017023", "1760020318", "1760020342", "1760020362", "1760020385", "1760020410"]
+    #timestamps = ["1760020318"]  # Replace with your actual timestamp
+    ##compute_overshoot(timestamp)
+    ## timestamps = ["1760017023", "1760020318", "1760020342", "1760020362", "1760020385", "1760020410"]
+    #dicts = []
+    #for ts in timestamps:
+    #    print(f"--- Processing timestamp {ts} ---")
+    #    out = compute_overshoot(ts)
+    #    if out is not None:
+    #        out['timestamp'] = ts
+    #        dicts.append(out)
+    DATA_DIR = "3_data_manual/3"
     dicts = []
-    for ts in timestamps:
-        print(f"--- Processing timestamp {ts} ---")
-        out = compute_overshoot(ts)
-        if out is not None:
-            out['timestamp'] = ts
-            dicts.append(out)
-
+    RUN_NUMBER = 2
+    print(list_svos(DATA_DIR))
+    svo_path = list_svos(DATA_DIR)[RUN_NUMBER-1]
+    print(svo_path)
+    out = compute_overshoot(DATA_DIR + "/" + svo_path)
+    out['timestamp'] = "test"
+    dicts.append(out)
      # Print results in tabular form
     if dicts:
         print("\nResults:")
