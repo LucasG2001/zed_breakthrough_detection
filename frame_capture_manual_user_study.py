@@ -10,7 +10,8 @@ except Exception as e:
     print("Failed to import ZED SDK Python bindings (pyzed.sl). Ensure ZED SDK + Python API are installed.")
     print("Error:", e)
     sys.exit(1)
-
+    
+# TODO:test with averaged values
 
 def setup_directories(participant_id, run, angle):
     base_dir = f"{participant_id}_data_manual"

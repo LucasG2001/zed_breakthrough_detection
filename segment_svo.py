@@ -402,7 +402,7 @@ def compute_overshoot(svo_path):
     centroid_weighted, direction_weighted = fit_line_pca_weighted(pts, confidences)
     constrained_line = fit_3d_line_with_pixel_constraint_v2(pts, confidences, special_points[0], special_points[1],
                                             fx, fy, cx, cy,
-                                            target_distance_mm=122.0, maxiter=100000)
+                                            target_distance_mm=122.0, maxiter=7000)
     
     centroid_constrained = constrained_line['p0']
     direction_constrained = constrained_line['v']
@@ -465,9 +465,9 @@ if __name__ == "__main__":
     #    if out is not None:
     #        out['timestamp'] = ts
     #        dicts.append(out)
-    DATA_DIR = "3_data_manual/3"
+    DATA_DIR = "0_data_manual/0"
     dicts = []
-    RUN_NUMBER = 2
+    RUN_NUMBER = 1
     print(list_svos(DATA_DIR))
     svo_path = list_svos(DATA_DIR)[RUN_NUMBER-1]
     print(svo_path)

@@ -45,6 +45,7 @@ def load_from_svo(svo_path):
     confidence = sl.Mat()
 
     n_frames = int(cam.get_svo_number_of_frames())
+    n_frames = 1
     print(f"Total frames in SVO: {n_frames}")
 
     rgb_accum = None
