@@ -14,7 +14,7 @@ except Exception as e:
 # TODO:test with averaged values
 
 def setup_directories(participant_id, run, angle):
-    base_dir = f"{participant_id}_data_manual"
+    base_dir = f"manual_data/{participant_id}_data_manual"
     os.makedirs(base_dir, exist_ok=True)
     run_dir = os.path.join(base_dir, f"{participant_id}")
     os.makedirs(run_dir, exist_ok=True)

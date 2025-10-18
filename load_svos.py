@@ -38,6 +38,7 @@ def load_from_svo(svo_path):
     status = cam.open(init_params)
     if status != sl.ERROR_CODE.SUCCESS:
         raise RuntimeError(f"Failed to open SVO: {status}")
+        
 
     runtime_params = sl.RuntimeParameters()
     image = sl.Mat()

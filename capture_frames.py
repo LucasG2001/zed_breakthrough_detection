@@ -21,6 +21,28 @@ except Exception as e:
 CAPTURE_DIR = "zed_captures"
 os.makedirs(CAPTURE_DIR, exist_ok=True)
 
+def extract_image_metrics(directory, input_filename, image, depth, confidence, intrinsics):
+    #process raw data
+    img = np.asarray(image.get_data())
+    if img.shape[2] == 4:
+        img = img[:, :, :3]
+    depth_arr = np.asarray(depth.get_data())
+    confidence_arr = np.asarray(confidence.get_data())  # Convert confidence map to num
+    # set paths
+    rgb_path = os.path.join(directory, input_filename + "_rgb.png")
+    depth_path = os.path.join(directory, input_filename + "_depth.npy")
+    intr_path = os.path.join(directory, input_filename + "_intrinsics.npy")
+    conf_path = os.path.join(directory, input_filename + "_confidence.npy")
+    # write data
+    cv2.imwrite(rgb_path, img)
+    np.save(depth_path, depth_arr)
+    np.save(conf_path, confidence_arr)
+    fx, fy, cx, cy = intrinsics
+    np.save(intr_path, np.array([fx, fy, cx, cy], dtype=np.float16))
+    #return
+    print(f"Saved: {rgb_path}, {depth_path}, {intr_path}")
+    return True
+
 
 def capture_frame_and_save():
     init = sl.InitParameters()

@@ -5,6 +5,8 @@ import os
 from line_segmenter_v2 import make_pcd
 from constrained_fit import fit_3d_line_with_pixel_constraint_v2
 from load_svos import  list_svos, load_from_svo
+import glob
+
 CAPTURE_DIR = "zed_captures"
 
 def project_3d_to_pixel(pt3d, fx, fy, cx, cy):
@@ -96,25 +98,34 @@ def make_lineset_safe(line_pts, color=[1, 0, 0]):
 
 def rgbd_to_points(rgb, depth, intrinsics):
     """
-    Convert full RGB-D image to 3D points and colors.
+    Convert full RGB-D image to 3D point cloud and corresponding colors.
+    
+    Args:
+        rgb: (H, W, 3) RGB image, dtype uint8
+        depth: (H, W) depth map in meters
+        intrinsics: (fx, fy, cx, cy)
+    Returns:
+        pts: (N, 3) array of valid 3D points
+        colors: (N, 3) array of corresponding RGB colors in [0, 1]
     """
     h, w = depth.shape
     fx, fy, cx, cy = intrinsics
 
-    # Create a grid of pixel coordinates
+    # Create pixel grid
     u, v = np.meshgrid(np.arange(w), np.arange(h))
+
     z = depth
-    valid_mask = z > 0
+
+    # ✅ Valid depth mask: positive, finite, and not NaN
+    valid_mask = (z > 0) & np.isfinite(z)
 
     # Compute 3D coordinates
     x = (u - cx) * z / fx
     y = (v - cy) * z / fy
     pts = np.stack([x, y, z], axis=-1)
 
-    # Filter out invalid points
+    # Apply mask
     pts = pts[valid_mask]
-
-    # Get corresponding colors (scale to 0-1)
     colors = rgb[valid_mask] / 255.0
 
     return pts, colors
@@ -250,7 +261,7 @@ class SimpleBrushSegmenter:
         self.depth = depth
         self.intr = intr
         self.conf = conf
-        self.brush_radius = 3  # smaller brush
+        self.brush_radius = 5  # smaller brush
         self.mask = np.zeros(image.shape[:2], np.uint8)
         self.points = []
         self.special_points = []
@@ -363,14 +374,33 @@ def show_depth_image(depth):
      cv2.waitKey(1)
 
 # ---------- MAIN ----------
-def compute_overshoot(svo_path):
+def compute_overshoot(is_manual: bool, file_path):
     # Load data
-    img, depth, intr, conf = load_from_svo(svo_path)
+    if is_manual:
+        img, depth, intr, conf = load_from_svo(file_path)
+    else:
+         # Load data
+        files = [f for f in os.listdir(file_path)]
+        print(files)
+        for f in files:
+            if f.endswith("confidence.npy"):
+                conf_path = os.path.join(file_path, f) 
+            elif f.endswith("depth.npy"):
+                depth_path = os.path.join(file_path, f) 
+            elif f.endswith("intrinsics.npy"):
+                intr_path = os.path.join(file_path, f) 
+            elif f.endswith("rgb.png"):
+                rgb_path = os.path.join(file_path, f) 
+
+        img = cv2.imread(rgb_path)
+        depth = np.load(depth_path)
+        intr = np.load(intr_path)
+        conf = np.load(conf_path)
 
     # Extract original points/colors
     fx, fy, cx, cy = intr
     points_orig, colors_orig = rgbd_to_points(img, depth, intr)
-    pc = make_pcd(points_orig, colors_orig)
+    # pc = make_pcd(points_orig, colors_orig)
     # o3d.visualization.draw_geometries([pc])
     
 
@@ -392,8 +422,7 @@ def compute_overshoot(svo_path):
 
     # Convert mask → 3D points
     pts, colors, confidences = mask_to_points(mask, depth, intr, img, conf)
-    pts = pts[confidences < 80]  # filter out low-confidence points
-    confidences = confidences[confidences < 80]
+    pts, colors, confidences = pts[confidences < 75], colors[confidences < 75] , confidences[confidences < 75]   # filter out low-confidence points
     if pts is None:
         print("No valid 3D points found.")
         return
@@ -455,26 +484,31 @@ if __name__ == "__main__":
     # DONE: segment third points
     # DONE: why is the computed overshooot so wrong?
 
-    #timestamps = ["1760020318"]  # Replace with your actual timestamp
-    ##compute_overshoot(timestamp)
-    ## timestamps = ["1760017023", "1760020318", "1760020342", "1760020362", "1760020385", "1760020410"]
-    #dicts = []
-    #for ts in timestamps:
-    #    print(f"--- Processing timestamp {ts} ---")
-    #    out = compute_overshoot(ts)
-    #    if out is not None:
-    #        out['timestamp'] = ts
-    #        dicts.append(out)
-    DATA_DIR = "0_data_manual/0"
+    DATA_DIR = "saved_robot_data"
+    participant = 1
+    participant_str = str(participant)+"_data_robotic"
+    run = 1
+    run_str = "run"+ str(run)
+    data_directory_full = DATA_DIR +"/" + participant_str +"/" + run_str + "/"
+    print("full data directory is " + data_directory_full)
     dicts = []
-    RUN_NUMBER = 1
-    print(list_svos(DATA_DIR))
-    svo_path = list_svos(DATA_DIR)[RUN_NUMBER-1]
-    print(svo_path)
-    out = compute_overshoot(DATA_DIR + "/" + svo_path)
-    out['timestamp'] = "test"
-    dicts.append(out)
-     # Print results in tabular form
+    print(f"--- Processing run {int(run)} ---")
+    out = compute_overshoot(is_manual=False, file_path=data_directory_full)
+    if out is not None:
+        out['timestamp'] = "test"
+        dicts.append(out)
+
+    # DATA_DIR = "saved_robot_data/1_data_robotic/1"
+    # dicts = []
+    # RUN_NUMBER = 1
+    # print(list_svos(DATA_DIR))
+    # svo_path = list_svos(DATA_DIR)[RUN_NUMBER-1]
+    # print(svo_path)
+    # out = compute_overshoot(DATA_DIR + "/" + svo_path)
+    # out['timestamp'] = "test"
+    # dicts.append(out)
+
+    #  # Print results in tabular form
     if dicts:
         print("\nResults:")
         print(f"{'Timestamp':>12} | {'PCA (mm)':>10} | {'Weighted (mm)':>14} | {'Constrained (mm)':>17}")
