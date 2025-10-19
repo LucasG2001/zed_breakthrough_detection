@@ -44,6 +44,7 @@ def load_from_svo(svo_path):
     image = sl.Mat()
     depth = sl.Mat()
     confidence = sl.Mat()
+    sensordata = sl.SensorsData()
 
     n_frames = int(cam.get_svo_number_of_frames())
     n_frames = 1
@@ -57,6 +58,10 @@ def load_from_svo(svo_path):
     for i in range(n_frames):
         print(f'nfrmes is {n_frames}')
         if cam.grab(runtime_params) == sl.ERROR_CODE.SUCCESS:
+            cam.get_sensors_data(sensordata, sl.TIME_REFERENCE.IMAGE)
+            acceleration = sensordata.get_imu_data().get_linear_acceleration()
+            accel_vec = np.array(acceleration)
+            g_imu = -accel_vec / np.linalg.norm(accel_vec)
             cam.retrieve_image(image, sl.VIEW.LEFT)
             cam.retrieve_measure(depth, sl.MEASURE.DEPTH)
             cam.retrieve_measure(confidence, sl.MEASURE.CONFIDENCE)
@@ -103,4 +108,4 @@ def load_from_svo(svo_path):
     # img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)  # convert to BGR if needed
     # cv2.imshow("RGB from Loader", img)
     # Ensure exact format match with old loader
-    return img, depth_avg, intr, conf_avg
+    return img, depth_avg, intr, conf_avg, g_imu

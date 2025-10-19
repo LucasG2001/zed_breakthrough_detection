@@ -364,6 +364,8 @@ def compute_overshoot(is_manual: bool, file_path, z_threshold=0.25):
     # Load data
     if is_manual:
         img, depth, intr, conf, gravity_dir = load_from_svo(file_path)
+        file = os.path.basename(file_path)
+        reference_angle = float(file.split("_")[2])
     else:
          # Load data
         files = [f for f in os.listdir(file_path)]
@@ -481,73 +483,57 @@ def compute_overshoot(is_manual: bool, file_path, z_threshold=0.25):
 
 
 if __name__ == "__main__":
-    # TODO: filter pointclouds
-    # TODO: visualize different lines
-    # TODO: erode edges of mask
-    # DONE: segment third points
-    # DONE: why is the computed overshooot so wrong?
+    # (TODO: erode edges of mask)
+    # MANUAL or ROBOTIC
 
+    manual = True
     # -----------------------------
     # Parameters
     # -----------------------------
+    PARTICIPANT = 2
+    RUN_NUMBER = 3
     
-    # Get current timestamp
-    now = datetime.now()
-    # Format: "DD-MM-YYYY_HHMMSS"
-    timestamp_str = now.strftime("%d-%m-%Y_%H%M%S")
-    DATA_DIR = "saved_robot_data"
-    participant = 2
-    run = 3
-
-    participant_str = f"{participant}_data_robotic"
-    run_str = f"run{run}"
-    data_directory_full = os.path.join(DATA_DIR, participant_str, run_str)
-    print("Full data directory is:", data_directory_full)
-
+    dicts = [] # will be filled
+    # Get current timestamp Format: "DD-MM-YYYY_HHMMSS"
+    timestamp_str = datetime.datetime.now().strftime("%d-%m-%Y_%H%M%S")
     # Output directory
-    results_dir = os.path.join("results", str(participant))
+    results_dir = os.path.join("results", str(PARTICIPANT))
     os.makedirs(results_dir, exist_ok=True)
-    output_file = os.path.join(results_dir, f"{run}.json")
-    output_mask = os.path.join(results_dir, f"{run}_mask.npy")
-
-    # -----------------------------
-    # Collect data
-    # -----------------------------
-    dicts = []
-    print(f"--- Processing run {run} ---")
-    out, mask = compute_overshoot(is_manual=False, file_path=data_directory_full)
+    output_file = os.path.join(results_dir, f"{RUN_NUMBER}.json")
+    output_mask = os.path.join(results_dir, f"{RUN_NUMBER}_mask.npy")
+    if manual:
+        DATA_DIR = f"manual_data/{PARTICIPANT}_data_manual/{PARTICIPANT}"
+        svo_path = list_svos(DATA_DIR)[RUN_NUMBER-1]
+        print(f"--- Processing run {RUN_NUMBER} ---")
+        out, mask = compute_overshoot(is_manual=True, file_path=DATA_DIR + "/" + svo_path)
+    else:
+        DATA_DIR = "saved_robot_data"
+        participant_str = f"{PARTICIPANT}_data_robotic"
+        run_str = f"run{RUN_NUMBER}"
+        data_directory_full = os.path.join(DATA_DIR, participant_str, run_str)
+        print(f"--- Processing run {RUN_NUMBER} ---")
+        out, mask = compute_overshoot(is_manual=False, file_path=data_directory_full)
     if out is not None:
         # Assign to the output dictionary
         out['timestamp'] = timestamp_str
         dicts.append(out)
+    # -----------------------------
+    # Format table nicely for display
+    # -----------------------------
+    for d in dicts:
+        print("-" * 70)
+        print(f"{'Metric':30} | {'PCA':>10} | {'Weighted':>14} | {'Constrained':>17}")
+        print("-" * 70)
+        print(f"{'control_distance':30} | {d['distance_pca_mm']:10.2f} | {d['distance_weighted_mm']:14.2f} | {d['distance_constrained_mm']:17.2f}")
+        print(f"{'soft_tissue_penetration':30} | {d['soft_tissue_penetration_mm_pca']:10.2f} | {d['soft_tissue_penetration_mm_weighted']:14.2f} | {d['soft_tissue_penetration_mm_constrained']:17.2f}")
+        print(f"{'orientation_error':30} | {d['orientation_error_pca']:10.2f} | {d['orientation_error_weighted']:14.2f} | {d['orientation_error_constrained']:17.2f}")
+        print("-" * 70)
 
-    # DATA_DIR = "saved_robot_data/1_data_robotic/1"
-    # dicts = []
-    # RUN_NUMBER = 1
-    # print(list_svos(DATA_DIR))
-    # svo_path = list_svos(DATA_DIR)[RUN_NUMBER-1]
-    # print(svo_path)
-    # out = compute_overshoot(DATA_DIR + "/" + svo_path)
-    # out['timestamp'] = "test"
-    # dicts.append(out)
+    # -----------------------------
+    # Save to JSON
+    # -----------------------------
+    with open(output_file, 'w') as f:
+        json.dump(dicts, f, indent=4)
+        np.save(output_mask, mask)
 
-   # -----------------------------
-# Format table nicely for display
-# -----------------------------
-for d in dicts:
-    print("-" * 70)
-    print(f"{'Metric':30} | {'PCA':>10} | {'Weighted':>14} | {'Constrained':>17}")
-    print("-" * 70)
-    print(f"{'control_distance':30} | {d['distance_pca_mm']:10.2f} | {d['distance_weighted_mm']:14.2f} | {d['distance_constrained_mm']:17.2f}")
-    print(f"{'soft_tissue_penetration':30} | {d['soft_tissue_penetration_mm_pca']:10.2f} | {d['soft_tissue_penetration_mm_weighted']:14.2f} | {d['soft_tissue_penetration_mm_constrained']:17.2f}")
-    print(f"{'orientation_error':30} | {d['orientation_error_pca']:10.2f} | {d['orientation_error_weighted']:14.2f} | {d['orientation_error_constrained']:17.2f}")
-    print("-" * 70)
-
-# -----------------------------
-# Save to JSON
-# -----------------------------
-with open(output_file, 'w') as f:
-    json.dump(dicts, f, indent=4)
-    np.save(output_mask, mask)
-
-print(f"Saved results to {output_file}")
+    print(f"Saved results to {output_file}")
