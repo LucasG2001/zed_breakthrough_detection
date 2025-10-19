@@ -199,6 +199,38 @@ def point_to_line_distance(points, line_point, line_dir):
     return d
 
 
+def angle_between_vectors(direction, reference_direction):
+    """
+    Compute the angle (in radians) between two 3D vectors.
+    
+    Parameters:
+        direction (array-like): 3D vector representing a direction.
+        reference_direction (array-like): 3D vector representing reference direction.
+        
+    Returns:
+        float: angle in degrees between the vectors.
+    """
+    # Convert to numpy arrays
+    v1 = np.array(direction, dtype=float)
+    v2 = np.array(reference_direction, dtype=float)
+    
+    # Normalize vectors
+    v1 /= np.linalg.norm(v1)
+    v2 /= np.linalg.norm(v2)
+    
+    # Compute dot product and clip to avoid numerical errors
+    dot_prod = np.clip(np.dot(v1, v2), -1.0, 1.0)
+    
+    # Angle in radians
+    angle = np.arccos(dot_prod)
+
+    angle = np.rad2deg(angle)
+    
+    # Return the acute angle (0-90°)
+    return min(angle, 180 - angle)
+
+
+
 def reconstruct_missing_depths_for_mask(mask, depth_arr, intr, line_point, line_dir):
     """
     For each pixel inside mask that has invalid depth, estimate depth by intersecting the camera ray

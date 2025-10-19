@@ -2,10 +2,11 @@ import numpy as np
 import cv2
 import open3d as o3d
 import os
-from line_segmenter_v2 import make_pcd
-from constrained_fit import fit_3d_line_with_pixel_constraint_v2
+from line_segmenter_v2 import make_pcd, angle_between_vectors
+from constrained_fit import fit_3d_line_with_pixel_constraint_v3
 from load_svos import  list_svos, load_from_svo
-import glob
+import json
+import datetime
 
 CAPTURE_DIR = "zed_captures"
 
@@ -15,23 +16,7 @@ def project_3d_to_pixel(pt3d, fx, fy, cx, cy):
         u = int(round(pt3d[0] * fx / pt3d[2] + cx))
         v = int(round(pt3d[1] * fy / pt3d[2] + cy))
         return (u, v)
-
-
-# ---- Print NaN and Inf diagnostics ----
-def print_nan_inf(name, arr):
-    arr = np.asarray(arr)
-    if arr.size == 0:
-        print(f"{name}: empty")
-        return
-    nan_mask = np.isnan(arr)
-    inf_mask = np.isinf(arr)
-    if np.any(nan_mask):
-        print(f"{name}: NaN at indices {np.argwhere(nan_mask)}")
-    if np.any(inf_mask):
-        print(f"{name}: Inf at indices {np.argwhere(inf_mask)}")
-    if not np.any(nan_mask) and not np.any(inf_mask):
-        print(f"{name}: OK (no NaN or Inf)")
-            
+         
 
 # ---------- FIT FUNCTIONS ----------
 def fit_line_pca(points):
@@ -96,7 +81,7 @@ def make_lineset_safe(line_pts, color=[1, 0, 0]):
     return ls
 
 
-def rgbd_to_points(rgb, depth, intrinsics):
+def rgbd_to_points(rgb, depth, intrinsics, z_threshold):
     """
     Convert full RGB-D image to 3D point cloud and corresponding colors.
     
@@ -117,7 +102,7 @@ def rgbd_to_points(rgb, depth, intrinsics):
     z = depth
 
     # ✅ Valid depth mask: positive, finite, and not NaN
-    valid_mask = (z > 0) & np.isfinite(z)
+    valid_mask = (z > 0) & np.isfinite(z) & (z < z_threshold)
 
     # Compute 3D coordinates
     x = (u - cx) * z / fx
@@ -232,8 +217,8 @@ def visualize_all(points_orig, colors_orig, centroids, directions, fitted_points
         centroid = np.asarray(centroid, dtype=np.float64).reshape(3)
         direction = np.asarray(direction, dtype=np.float64).reshape(3)
         direction = direction / np.linalg.norm(direction)
-        cloud_extent = np.max(np.linalg.norm(points_orig - centroid, axis=1))
-        t = min(max(cloud_extent * 2.0, 0.1), 1.0)  # between 0.1 and 1.0 meters
+        cloud_extent = np.max(np.linalg.norm(fitted_points_after - centroid, axis=1))
+        t = min(max(cloud_extent * 2.0, 0.1), 0.6)  # between 0.1 and 1.0 meters
         print("Line endpoints:", centroid - direction * t, centroid + direction * t)
         line_pts = np.array([centroid - direction * t, centroid + direction * t], dtype=np.float64)
         line_set = o3d.geometry.LineSet()
@@ -249,8 +234,9 @@ def visualize_all(points_orig, colors_orig, centroids, directions, fitted_points
     print("Created line set — ready to visualize")
 
     # ---------------- Visualize ----------------
-    o3d.visualization.draw_geometries([pcd_full, pcd_fitted] + line_sets[0:2], window_name="All Point Cloud without fitted line")
-    o3d.visualization.draw_geometries([pcd_full, pcd_fitted] + line_sets, window_name="All Point Cloud")
+    o3d.visualization.draw_geometries([pcd_full, pcd_fitted], window_name="All Point Cloud without fitted lines")
+    o3d.visualization.draw_geometries([pcd_full, pcd_fitted] + line_sets[1:3], window_name="All Point Cloud with fitted lines PCA  gb =/weighted/pca")
+    o3d.visualization.draw_geometries([pcd_full, pcd_fitted] + line_sets, window_name="All Point Cloud with all fitted lines RGB = constr/weighted/pca")
 
 
 # ---------- SEGMENTATION ----------
@@ -261,7 +247,7 @@ class SimpleBrushSegmenter:
         self.depth = depth
         self.intr = intr
         self.conf = conf
-        self.brush_radius = 5  # smaller brush
+        self.brush_radius = 6  # smaller brush
         self.mask = np.zeros(image.shape[:2], np.uint8)
         self.points = []
         self.special_points = []
@@ -302,12 +288,12 @@ class SimpleBrushSegmenter:
         return self.mask
 
 
-def mask_to_points(mask, depth, intr, rgb, confidence_map):
+def mask_to_points(mask, depth, intr, rgb, confidence_map, z_threshold=0.2):
     fx, fy, cx, cy = intr
     ys, xs = np.where(mask == 255)
     zs = depth[ys, xs]
     confidence_array = confidence_map[ys, xs]
-    valid = np.isfinite(zs) & (zs > 0)
+    valid = np.isfinite(zs) & (zs > 0) & (zs < z_threshold) # filter points that are too far away
     xs, ys, zs = xs[valid], ys[valid], zs[valid]
 
     if len(xs) == 0:
@@ -374,10 +360,10 @@ def show_depth_image(depth):
      cv2.waitKey(1)
 
 # ---------- MAIN ----------
-def compute_overshoot(is_manual: bool, file_path):
+def compute_overshoot(is_manual: bool, file_path, z_threshold=0.25):
     # Load data
     if is_manual:
-        img, depth, intr, conf = load_from_svo(file_path)
+        img, depth, intr, conf, gravity_dir = load_from_svo(file_path)
     else:
          # Load data
         files = [f for f in os.listdir(file_path)]
@@ -391,22 +377,27 @@ def compute_overshoot(is_manual: bool, file_path):
                 intr_path = os.path.join(file_path, f) 
             elif f.endswith("rgb.png"):
                 rgb_path = os.path.join(file_path, f) 
+                reference_angle = float(f.split("_")[2])
+            elif f.endswith("gravity.npy"):
+                gravity_path = os.path.join(file_path, f)
 
         img = cv2.imread(rgb_path)
         depth = np.load(depth_path)
         intr = np.load(intr_path)
         conf = np.load(conf_path)
+        gravity_dir = np.load(gravity_path)
+        print(f"gravity direction (90 deg) is {gravity_dir}")
+        print(f"reference_direction is {reference_angle}")
 
     # Extract original points/colors
     fx, fy, cx, cy = intr
-    points_orig, colors_orig = rgbd_to_points(img, depth, intr)
-    # pc = make_pcd(points_orig, colors_orig)
-    # o3d.visualization.draw_geometries([pc])
+    points_orig, colors_orig = rgbd_to_points(img, depth, intr, z_threshold)
     
-
     # Pass confidence to segmenter
     seg = SimpleBrushSegmenter(img, depth, intr, conf=conf)
     mask = seg.run()
+    
+
 
     # After segmentation, allow user to select 2 points
     special_points = select_points(img, 2, window_args="(select start and end points of drill bit)")
@@ -421,17 +412,17 @@ def compute_overshoot(is_manual: bool, file_path):
 
 
     # Convert mask → 3D points
-    pts, colors, confidences = mask_to_points(mask, depth, intr, img, conf)
-    pts, colors, confidences = pts[confidences < 75], colors[confidences < 75] , confidences[confidences < 75]   # filter out low-confidence points
+    pts, colors, confidences = mask_to_points(mask, depth, intr, img, conf, z_threshold)
+    pts, colors, confidences = pts[confidences < 95], colors[confidences < 95] , confidences[confidences < 95]   # filter out low-confidence points
+    print(f"number of valid points is {len(pts)}")
     if pts is None:
         print("No valid 3D points found.")
         return
 
     centroid_pca, direction_pca = fit_line_pca(pts)
     centroid_weighted, direction_weighted = fit_line_pca_weighted(pts, confidences)
-    constrained_line = fit_3d_line_with_pixel_constraint_v2(pts, confidences, special_points[0], special_points[1],
-                                            fx, fy, cx, cy,
-                                            target_distance_mm=122.0, maxiter=7000)
+    constrained_line = fit_3d_line_with_pixel_constraint_v3(pts, centroid_weighted, direction_weighted, confidences, special_points[0], special_points[1],
+                                                            fx, fy, cx, cy, target_distance_mm=122.0, maxiter=7000, verbose = True)
     
     centroid_constrained = constrained_line['p0']
     direction_constrained = constrained_line['v']
@@ -464,16 +455,28 @@ def compute_overshoot(is_manual: bool, file_path):
 
     centroids = [centroid_constrained, centroid_weighted, centroid_pca]
     directions = [direction_constrained, direction_weighted, direction_pca]
+    orientation_errors = []
+    # compute orientation errors
+    for drill_direction in directions:
+        print("Line direction:", drill_direction)
+        print("gravity direction:", gravity_dir)
+        reference_deviation = 90.0 - reference_angle
+        error_to_gravity_dir = angle_between_vectors(drill_direction, gravity_dir)
+        print(f"error to gravity is {error_to_gravity_dir}")
+        orientation_errors.append(np.abs(reference_deviation-error_to_gravity_dir)) # compute error via desired deviation - total dev
 
     visualize_all(points_orig, colors_orig, centroids, directions, pts, projected_constrained)
 
     return {"distance_pca_mm": dist_pca,
             "distance_weighted_mm": dist_weighted,
             "distance_constrained_mm": dist_mm,
+            "orientation_error_constrained": orientation_errors[0],
+            "orientation_error_weighted": orientation_errors[1],
+            "orientation_error_pca": orientation_errors[2],
             "soft_tissue_penetration_mm_constrained": soft_tissue_penetration_mm_constrained,
             "soft_tissue_penetration_mm_weighted": soft_tissue_penetration_mm_weighted,
             "soft_tissue_penetration_mm_pca": soft_tissue_penetration_mm_pca
-            }
+            }, mask
     
 
 
@@ -484,18 +487,38 @@ if __name__ == "__main__":
     # DONE: segment third points
     # DONE: why is the computed overshooot so wrong?
 
+    # -----------------------------
+    # Parameters
+    # -----------------------------
+    
+    # Get current timestamp
+    now = datetime.now()
+    # Format: "DD-MM-YYYY_HHMMSS"
+    timestamp_str = now.strftime("%d-%m-%Y_%H%M%S")
     DATA_DIR = "saved_robot_data"
-    participant = 1
-    participant_str = str(participant)+"_data_robotic"
-    run = 1
-    run_str = "run"+ str(run)
-    data_directory_full = DATA_DIR +"/" + participant_str +"/" + run_str + "/"
-    print("full data directory is " + data_directory_full)
+    participant = 2
+    run = 3
+
+    participant_str = f"{participant}_data_robotic"
+    run_str = f"run{run}"
+    data_directory_full = os.path.join(DATA_DIR, participant_str, run_str)
+    print("Full data directory is:", data_directory_full)
+
+    # Output directory
+    results_dir = os.path.join("results", str(participant))
+    os.makedirs(results_dir, exist_ok=True)
+    output_file = os.path.join(results_dir, f"{run}.json")
+    output_mask = os.path.join(results_dir, f"{run}_mask.npy")
+
+    # -----------------------------
+    # Collect data
+    # -----------------------------
     dicts = []
-    print(f"--- Processing run {int(run)} ---")
-    out = compute_overshoot(is_manual=False, file_path=data_directory_full)
+    print(f"--- Processing run {run} ---")
+    out, mask = compute_overshoot(is_manual=False, file_path=data_directory_full)
     if out is not None:
-        out['timestamp'] = "test"
+        # Assign to the output dictionary
+        out['timestamp'] = timestamp_str
         dicts.append(out)
 
     # DATA_DIR = "saved_robot_data/1_data_robotic/1"
@@ -508,13 +531,23 @@ if __name__ == "__main__":
     # out['timestamp'] = "test"
     # dicts.append(out)
 
-    #  # Print results in tabular form
-    if dicts:
-        print("\nResults:")
-        print(f"{'Timestamp':>12} | {'PCA (mm)':>10} | {'Weighted (mm)':>14} | {'Constrained (mm)':>17}")
-        print("-" * 60)
-        for d in dicts:
-            print(f"{d['timestamp']:>12} | {d['distance_pca_mm']:10.2f} | {d['distance_weighted_mm']:14.2f} | {d['distance_constrained_mm']:17.2f}")
-            print(f"{d['timestamp']:>12} | {d['soft_tissue_penetration_mm_pca']:10.2f} | {d['soft_tissue_penetration_mm_weighted']:14.2f} | {d['soft_tissue_penetration_mm_constrained']:17.2f}")
+   # -----------------------------
+# Format table nicely for display
+# -----------------------------
+for d in dicts:
+    print("-" * 70)
+    print(f"{'Metric':30} | {'PCA':>10} | {'Weighted':>14} | {'Constrained':>17}")
+    print("-" * 70)
+    print(f"{'control_distance':30} | {d['distance_pca_mm']:10.2f} | {d['distance_weighted_mm']:14.2f} | {d['distance_constrained_mm']:17.2f}")
+    print(f"{'soft_tissue_penetration':30} | {d['soft_tissue_penetration_mm_pca']:10.2f} | {d['soft_tissue_penetration_mm_weighted']:14.2f} | {d['soft_tissue_penetration_mm_constrained']:17.2f}")
+    print(f"{'orientation_error':30} | {d['orientation_error_pca']:10.2f} | {d['orientation_error_weighted']:14.2f} | {d['orientation_error_constrained']:17.2f}")
+    print("-" * 70)
 
+# -----------------------------
+# Save to JSON
+# -----------------------------
+with open(output_file, 'w') as f:
+    json.dump(dicts, f, indent=4)
+    np.save(output_mask, mask)
 
+print(f"Saved results to {output_file}")

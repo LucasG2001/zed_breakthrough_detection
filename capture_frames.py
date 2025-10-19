@@ -21,7 +21,7 @@ except Exception as e:
 CAPTURE_DIR = "zed_captures"
 os.makedirs(CAPTURE_DIR, exist_ok=True)
 
-def extract_image_metrics(directory, input_filename, image, depth, confidence, intrinsics):
+def extract_image_metrics(directory, input_filename, image, depth, confidence, intrinsics, gravity):
     #process raw data
     img = np.asarray(image.get_data())
     if img.shape[2] == 4:
@@ -33,12 +33,14 @@ def extract_image_metrics(directory, input_filename, image, depth, confidence, i
     depth_path = os.path.join(directory, input_filename + "_depth.npy")
     intr_path = os.path.join(directory, input_filename + "_intrinsics.npy")
     conf_path = os.path.join(directory, input_filename + "_confidence.npy")
+    gravity_path = os.path.join(directory, input_filename + "_gravity.npy")
     # write data
     cv2.imwrite(rgb_path, img)
     np.save(depth_path, depth_arr)
     np.save(conf_path, confidence_arr)
     fx, fy, cx, cy = intrinsics
     np.save(intr_path, np.array([fx, fy, cx, cy], dtype=np.float16))
+    np.save(gravity_path, gravity)
     #return
     print(f"Saved: {rgb_path}, {depth_path}, {intr_path}")
     return True

@@ -1,193 +1,280 @@
 import numpy as np
 from scipy.optimize import minimize
 
-# --- Helpers (same conventions as your file) ---
-
-def angles_to_unit_vector(theta_phi):
-    theta, phi = theta_phi
-    st = np.sin(theta)
-    return np.array([st * np.cos(phi), st * np.sin(phi), np.cos(theta)])
+# --- Helpers ---
 
 def ray_point_from_pixel(Kinv, pixel, d):
+    """Get 3D point at depth d along the ray from pixel."""
     uv = np.array([pixel[0], pixel[1], 1.0])
     return d * (Kinv @ uv)
 
+def ray_direction_from_pixel(Kinv, pixel):
+    """Get normalized ray direction from pixel."""
+    uv = np.array([pixel[0], pixel[1], 1.0])
+    ray_dir = Kinv @ uv
+    return ray_dir / np.linalg.norm(ray_dir)
+
+def closest_point_ray_to_line(ray_origin, ray_dir, line_point, line_dir):
+    """
+    Find closest points between a ray and a line.
+    Returns: (point_on_ray, point_on_line, distance, ray_depth)
+    """
+    # Parametric forms:
+    # Ray: P_r(s) = ray_origin + s * ray_dir, s >= 0
+    # Line: P_l(t) = line_point + t * line_dir
+    
+    w = ray_origin - line_point
+    a = np.dot(ray_dir, ray_dir)
+    b = np.dot(ray_dir, line_dir)
+    c = np.dot(line_dir, line_dir)
+    d = np.dot(ray_dir, w)
+    e = np.dot(line_dir, w)
+    
+    denom = a * c - b * b
+    
+    if abs(denom) < 1e-10:
+        # Parallel case
+        s = 0.0
+        t = e / c if abs(c) > 1e-10 else 0.0
+    else:
+        s = (b * e - c * d) / denom
+        t = (a * e - b * d) / denom
+    
+    # Clamp s to be non-negative (ray constraint)
+    s = max(0.0, s)
+    
+    point_on_ray = ray_origin + s * ray_dir
+    point_on_line = line_point + t * line_dir
+    dist = np.linalg.norm(point_on_ray - point_on_line)
+    
+    return point_on_ray, point_on_line, dist, s
+
 def perp_residual_sum(u_vec, X, m, weights=None):
+    """Sum of squared perpendicular distances from points X to line (m, u_vec)."""
     if weights is None:
         weights = np.ones(X.shape[0])
     v = X - m  # (N,3)
-    # perpendicular component of each v to u_vec:
     proj_along = (v @ u_vec)[:, None] * u_vec[None, :]
     perp = v - proj_along
-    # squared norms weighted
     return float(np.sum(weights * np.sum(perp**2, axis=1)))
 
-# --- Main solver with hard intersection + distance constraints ---
+# --- Main solver ---
 
-def fit_3d_line_with_pixel_constraint_v2(points3d, confidences,
-                                              pixel_pt1, pixel_pt2,
-                                              fx, fy, cx, cy,
-                                              target_distance_mm=145.0,
-                                              maxiter=1000, verbose=False):
+def fit_3d_line_with_pixel_constraint_v3(points3d, m_init, u_init, confidences,
+                                         pixel_pt1, pixel_pt2,
+                                         fx, fy, cx, cy,
+                                         target_distance_mm=122.0,
+                                         maxiter=2000, verbose=True):
     """
-    Fit a 3D line that:
-      - intersects the two pixel rays (hard equality constraints),
-      - the two intersection points on the line are exactly target_distance_mm apart,
-      - minimizes orthogonal distances from points3d to the line (weighted).
-    Returns dict with line params and intersection points.
+    Fit a 3D line with 6 optimization variables: [u_x, u_y, u_z, m_x, m_y, m_z]
+    
+    Uses direct direction vector representation (more linear than angles).
+    Direction is normalized internally to maintain unit length.
+    
+    Objective:
+      - 70% weight: Minimize perpendicular distance from points3d to line (weighted)
+      - 30% weight: Minimize distance from rays to the line
+    
+    Constraints (1 hard constraint):
+      - Two points on the line (closest to the rays) are exactly L apart
+      
+    Returns dict with line params and the two constraint points on the line.
     """
     X = np.asarray(points3d, dtype=float)
     conf = np.asarray(confidences, dtype=float)
-    L = target_distance_mm/1000  # keep units consistent with X (assume X in m)
-    # weights: transform confidences (same as you used)
-    weights = 100.0 - confidences
-    weights = np.clip(weights, 0, None)  # no negative weights
-    weights = weights / np.sum(weights)  # normalize to sum=1
+    L = target_distance_mm / 1000.0  # convert to meters
+    
+    # Weights for data points: transform confidences
+    data_weights = 100.0 - conf
+    data_weights = np.clip(data_weights, 0, None)
+    total_data_weight = np.sum(data_weights)
+    data_weights = data_weights / (total_data_weight + 1e-10)  # normalize to sum=1
 
-    # camera intrinsics
+    # Camera intrinsics
     K = np.array([[fx, 0, cx],
                   [0, fy, cy],
                   [0,  0,  1]], dtype=float)
     Kinv = np.linalg.inv(K)
-    pix1 = np.array(pixel_pt1)
-    pix2 = np.array(pixel_pt2)
+    pix1 = np.array(pixel_pt1, dtype=float)
+    pix2 = np.array(pixel_pt2, dtype=float)
+    
+    # Ray directions (normalized)
+    ray_dir1 = ray_direction_from_pixel(Kinv, pix1)
+    ray_dir2 = ray_direction_from_pixel(Kinv, pix2)
+    ray_origin = np.array([0.0, 0.0, 0.0])  # camera at origin
 
-    # initial guess for line via PCA
-    meanX = X.mean(axis=0)
-    C = ((X - meanX).T @ (X - meanX)) / (X.shape[0] if X.shape[0] > 0 else 1.0)
-    eigvals, eigvecs = np.linalg.eigh(C)
-    u0_vec = eigvecs[:, np.argmax(eigvals)]
-    theta0 = np.arccos(np.clip(u0_vec[2], -1.0, 1.0))
-    phi0 = np.arctan2(u0_vec[1], u0_vec[0])
+    # Initial guess: [u_x, u_y, u_z, m_x, m_y, m_z]
+    u_init_normalized = u_init / np.linalg.norm(u_init)
+    x0 = np.hstack([u_init_normalized, m_init])
 
-    # initial depths: intersect ray with plane (plane: meanX, normal u0_vec)
-    def intersect_ray_with_plane(Kinv, pix, plane_point, plane_normal):
-        dir_vec = Kinv @ np.array([pix[0], pix[1], 1.0])
-        denom = dir_vec.dot(plane_normal)
-        if abs(denom) < 1e-8:
-            return None
-        # plane equation: plane_normal . (X) = plane_normal . plane_point
-        return (plane_point.dot(plane_normal)) / denom
+    def get_line_params(x):
+        """Extract and normalize line parameters from optimization vector."""
+        u_vec = np.array(x[0:3])
+        u_vec = u_vec / (np.linalg.norm(u_vec) + 1e-10)  # normalize to unit vector
+        m = np.array(x[3:6])
+        return m, u_vec
 
-    d1_init = intersect_ray_with_plane(Kinv, pix1, meanX, u0_vec)
-    d2_init = intersect_ray_with_plane(Kinv, pix2, meanX, u0_vec)
-    if d1_init is None or d1_init <= 0: d1_init = max(1.0, meanX[2])
-    if d2_init is None or d2_init <= 0: d2_init = max(1.0, meanX[2])
-
-    s1_init = ray_point_from_pixel(Kinv, pix1, d1_init)
-    s2_init = ray_point_from_pixel(Kinv, pix2, d2_init)
-    # project these onto initial line (m = meanX)
-    t1_init = float(u0_vec.dot(s1_init - meanX))
-    t2_init = float(u0_vec.dot(s2_init - meanX))
-    # if t2 - t1 not matching L, nudge them symmetric about mean
-    mid = 0.5 * (t1_init + t2_init)
-    halfL = 0.5 * (L if L != 0 else 1.0)
-    t1_init = mid - halfL
-    t2_init = mid + halfL
-
-    # x = [theta, phi, m_x, m_y, m_z, d1, d2, t1, t2]
-    x0 = np.hstack([theta0, phi0, meanX, d1_init, d2_init, t1_init, t2_init])
-
-    # Constraints: vector-valued equality with length 7
     def constraint_vector(x):
-        theta, phi = x[0], x[1]
-        m = np.array(x[2:5])
-        d1, d2 = x[5], x[6]
-        t1, t2 = x[7], x[8]
-        u_vec = angles_to_unit_vector([theta, phi])
+        """
+        One constraint: Distance between the two closest points on the line = L
+        """
+        m, u_vec = get_line_params(x)
+        
+        # Find closest points on line to each ray
+        _, p1_on_line, _, _ = closest_point_ray_to_line(ray_origin, ray_dir1, m, u_vec)
+        _, p2_on_line, _, _ = closest_point_ray_to_line(ray_origin, ray_dir2, m, u_vec)
+        
+        # Constraint: distance between these points = L
+        dist = np.linalg.norm(p2_on_line - p1_on_line)
+        c_dist = dist - L
+        
+        return np.array([c_dist])
 
-        s1 = ray_point_from_pixel(Kinv, pix1, d1)   # point on ray1
-        s2 = ray_point_from_pixel(Kinv, pix2, d2)   # point on ray2
-        p1 = m + t1 * u_vec                         # point on line
-        p2 = m + t2 * u_vec
-
-        # ray-line intersection enforced by s1 == p1 and s2 == p2 (3+3 eqns)
-        c1 = s1 - p1   # shape (3,)
-        c2 = s2 - p2   # shape (3,)
-
-        # distance along line constraint: (t2 - t1)^2 - L^2 == 0
-        c3 = np.array([(t2 - t1)**2 - L**2])
-
-        return np.hstack([c1, c2, c3])  # length 7
-
-    # objective: perpendicular residuals to the line (m, u)
     def objective(x):
-        theta, phi = x[0], x[1]
-        m = np.array(x[2:5])
-        u_vec = angles_to_unit_vector([theta, phi])
-        return perp_residual_sum(u_vec, X, m, weights=weights)
+        """
+        Minimize weighted combination:
+        - 70% weight: perpendicular distance from data points to line
+        - 30% weight: distance from rays to line
+        
+        Weight balance ensures ray constraint is significant but not dominant.
+        """
+        m, u_vec = get_line_params(x)
+        
+        # Primary term: perpendicular distance from data points (weighted by confidence)
+        data_residual = perp_residual_sum(u_vec, X, m, weights=data_weights)
+        
+        # Secondary term: distance from rays to line
+        _, _, dist1, _ = closest_point_ray_to_line(ray_origin, ray_dir1, m, u_vec)
+        _, _, dist2, _ = closest_point_ray_to_line(ray_origin, ray_dir2, m, u_vec)
+        ray_residual = dist1**2 + dist2**2
+        
+        # Weight calculation:
+        # We want ray term to be ~30% of total, data term ~70%
+        # If data_residual has scale ~1 (normalized weights), 
+        # then we want: 0.7 * data_residual + 0.3 * (scaled ray_residual)
+        # But ray_residual is in m^2, so we scale it to match data term magnitude
+        
+        # Estimate typical scale: assume data points form ~0.1m cloud
+        # Then data_residual ~ 0.01 m^2, ray_residual ~ 0.001 m^2
+        # Weight ratio: (0.3/0.7) * (data_residual_scale / ray_residual_scale)
+        
+        # Simpler approach: weight ray term such that at initialization,
+        # it contributes ~30% to total objective
+        ray_weight = 0.3 / 0.7  # ratio of 30:70
+        
+        return data_residual + ray_weight * ray_residual
 
-    # bounds: keep sensible ranges (depths > 0)
+    # Bounds: keep direction components reasonable (will be normalized anyway)
     bnds = [
-        (1e-6, np.pi - 1e-6),   # theta
-        (-np.pi, np.pi),        # phi
+        (-10, 10), (-10, 10), (-10, 10),  # u_x, u_y, u_z (will be normalized)
         (None, None), (None, None), (None, None),  # m_x, m_y, m_z
-        (1e-6, None), (1e-6, None),  # d1, d2 (positive depths)
-        (None, None), (None, None)   # t1, t2
     ]
 
     cons = {'type': 'eq', 'fun': constraint_vector}
 
-    #res = minimize(objective, x0, method='SLSQP', bounds=bnds, constraints=cons,
-    #               options={'ftol': 1e-9, 'maxiter': maxiter, 'disp': verbose})
+    # Check initial constraint violation
+    init_constraint = constraint_vector(x0)
+    if verbose:
+        print(f"Initial constraint violation: {np.linalg.norm(init_constraint):.6f}")
+        m_init_check, u_init_check = get_line_params(x0)
+        init_obj = objective(x0)
+        print(f"Initial objective: {init_obj:.6e}")
 
+    # Optimize - SLSQP is good for this type of problem (smooth, small number of constraints)
     res = minimize(
-    objective, x0, method='trust-constr',
-    constraints=cons, bounds=bnds,
-    options={'verbose': 2, 'maxiter': maxiter}
-)
+        objective, x0, method='SLSQP',
+        constraints=cons, bounds=bnds,
+        options={'disp': verbose, 'maxiter': maxiter, 'ftol': 1e-9}
+    )
     
-    theta_opt, phi_opt = res.x[0], res.x[1]
-    m_opt = res.x[2:5]
-    d1_opt, d2_opt = res.x[5], res.x[6]
-    t1_opt, t2_opt = res.x[7], res.x[8]
-    u_opt = angles_to_unit_vector([theta_opt, phi_opt])
-
-    s1_opt = ray_point_from_pixel(Kinv, pix1, d1_opt)
-    s2_opt = ray_point_from_pixel(Kinv, pix2, d2_opt)
-    p1_opt = m_opt + t1_opt * u_opt
-    p2_opt = m_opt + t2_opt * u_opt
-
+    # If SLSQP fails, try trust-constr as backup
+    if not res.success and verbose:
+        print("\nSLSQP failed, trying trust-constr...")
+        res = minimize(
+            objective, x0, method='trust-constr',
+            constraints=cons, bounds=bnds,
+            options={'verbose': 1 if verbose else 0, 'maxiter': maxiter}
+        )
+    
+    # Extract results
+    m_opt, u_opt = get_line_params(res.x)
+    
+    # Get the two points on the line (closest to rays)
+    ray1_pt, p1_on_line, dist1, d1_opt = closest_point_ray_to_line(
+        ray_origin, ray_dir1, m_opt, u_opt
+    )
+    ray2_pt, p2_on_line, dist2, d2_opt = closest_point_ray_to_line(
+        ray_origin, ray_dir2, m_opt, u_opt
+    )
+    
+    # Compute t-parameters for the line points
+    t1 = np.dot(p1_on_line - m_opt, u_opt)
+    t2 = np.dot(p2_on_line - m_opt, u_opt)
+    
     return {
         'p0': m_opt,
         'v': u_opt,
         'ray1_depth': d1_opt,
         'ray2_depth': d2_opt,
-        'ray1_point_on_ray': s1_opt,
-        'ray2_point_on_ray': s2_opt,
-        'proj1_on_line': p1_opt,
-        'proj2_on_line': p2_opt,
-        'distance_between_proj_points_mm': np.linalg.norm(p2_opt - p1_opt),
-        'distance_between_ray_points_mm': np.linalg.norm(s2_opt - s1_opt),
+        'ray1_point_on_ray': ray1_pt,
+        'ray2_point_on_ray': ray2_pt,
+        'proj1_on_line': p1_on_line,
+        'proj2_on_line': p2_on_line,
+        't1': t1,
+        't2': t2,
+        'distance_between_line_points_m': np.linalg.norm(p2_on_line - p1_on_line),
+        'distance_between_line_points_mm': np.linalg.norm(p2_on_line - p1_on_line) * 1000,
+        'ray1_to_line_distance_mm': dist1 * 1000,
+        'ray2_to_line_distance_mm': dist2 * 1000,
         'success': res.success,
         'message': res.message,
-        'fun': res.fun,
+        'objective_value': res.fun,
+        'constraint_violation': np.linalg.norm(constraint_vector(res.x)),
         'res': res
     }
 
-# --- Example usage (replace with your big dataset) ---
+
+# --- Example usage ---
 if __name__ == "__main__":
-    # toy data (replace with your data in mm)
+    # Toy data in meters
     points3d = np.array([
-        [100.0, 200.0, 50.0],
-        [105.0, 210.0, 52.0],
-        [110.0, 220.0, 53.5],
-        [115.0, 230.0, 54.0],
+        [0.100, 0.200, 0.500],
+        [0.105, 0.210, 0.520],
+        [0.110, 0.220, 0.535],
+        [0.115, 0.230, 0.540],
     ])
     confidences = np.array([0, 10, 30, 60])
+
+    # Initial guess
+    m_init = points3d.mean(axis=0)
+    u_init = np.array([1.0, 1.0, 0.1])
+    u_init = u_init / np.linalg.norm(u_init)
 
     fx, fy, cx, cy = 800.0, 800.0, 320.0, 240.0
     pixel_pt1 = (320, 240)
     pixel_pt2 = (420, 260)
 
-    out = fit_3d_line_with_pixel_constraint_v2(points3d, confidences,
-                                                    pixel_pt1, pixel_pt2,
-                                                    fx, fy, cx, cy,
-                                                    target_distance_mm=145.0,
-                                                    maxiter=1000, verbose=True)
-    print("Success:", out['success'], out['message'])
-    print("Line point p0:", out['p0'])
-    print("Line dir v:", out['v'])
-    print("Projection pts on line:", out['proj1_on_line'], out['proj2_on_line'])
-    print("Distance between proj points (mm):", out['distance_between_proj_points_mm'])
-    print("Ray points (should equal proj points up to small tol):", out['ray1_point_on_ray'], out['ray2_point_on_ray'])
+    out = fit_3d_line_with_pixel_constraint_v3(
+        points3d, m_init, u_init, confidences,
+        pixel_pt1, pixel_pt2,
+        fx, fy, cx, cy,
+        target_distance_mm=122.0,
+        maxiter=2000, verbose=True
+    )
+    
+    print("\n" + "="*60)
+    print("RESULTS:")
+    print("="*60)
+    print(f"Success: {out['success']}")
+    print(f"Message: {out['message']}")
+    print(f"\nLine point p0: {out['p0']}")
+    print(f"Line direction v: {out['v']}")
+    print(f"Direction magnitude: {np.linalg.norm(out['v'])}")
+    print(f"\nPoint 1 on line: {out['proj1_on_line']}")
+    print(f"Point 2 on line: {out['proj2_on_line']}")
+    print(f"\nDistance between line points: {out['distance_between_line_points_mm']:.3f} mm (target: 122.0 mm)")
+    print(f"Ray 1 to line distance: {out['ray1_to_line_distance_mm']:.6f} mm")
+    print(f"Ray 2 to line distance: {out['ray2_to_line_distance_mm']:.6f} mm")
+    print(f"\nDepths: d1={out['ray1_depth']:.4f} m, d2={out['ray2_depth']:.4f} m")
+    print(f"Objective value: {out['objective_value']:.6e}")
+    print(f"Constraint violation: {out['constraint_violation']:.6e}")
