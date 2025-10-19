@@ -496,17 +496,21 @@ if __name__ == "__main__":
     dicts = [] # will be filled
     # Get current timestamp Format: "DD-MM-YYYY_HHMMSS"
     timestamp_str = datetime.datetime.now().strftime("%d-%m-%Y_%H%M%S")
-    # Output directory
-    results_dir = os.path.join("results", str(PARTICIPANT))
-    os.makedirs(results_dir, exist_ok=True)
-    output_file = os.path.join(results_dir, f"{RUN_NUMBER}.json")
-    output_mask = os.path.join(results_dir, f"{RUN_NUMBER}_mask.npy")
+    
+    # -----------------------------
+    # Manual Drilling
+    # -----------------------------
     if manual:
+        results_dir = os.path.join("results_manual", str(PARTICIPANT))
         DATA_DIR = f"manual_data/{PARTICIPANT}_data_manual/{PARTICIPANT}"
         svo_path = list_svos(DATA_DIR)[RUN_NUMBER-1]
         print(f"--- Processing run {RUN_NUMBER} ---")
         out, mask = compute_overshoot(is_manual=True, file_path=DATA_DIR + "/" + svo_path)
+    # -----------------------------
+    # Robotic Drilling
+    # -----------------------------
     else:
+        results_dir = os.path.join("results_robotic", str(PARTICIPANT))
         DATA_DIR = "saved_robot_data"
         participant_str = f"{PARTICIPANT}_data_robotic"
         run_str = f"run{RUN_NUMBER}"
@@ -517,6 +521,10 @@ if __name__ == "__main__":
         # Assign to the output dictionary
         out['timestamp'] = timestamp_str
         dicts.append(out)
+
+    os.makedirs(results_dir, exist_ok=True)
+    output_file = os.path.join(results_dir, f"{RUN_NUMBER}.json")
+    output_mask = os.path.join(results_dir, f"{RUN_NUMBER}_mask.npy")
     # -----------------------------
     # Format table nicely for display
     # -----------------------------
