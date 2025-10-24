@@ -490,8 +490,8 @@ if __name__ == "__main__":
     # -----------------------------
     # Parameters
     # -----------------------------
-    PARTICIPANT = 2
-    RUN_NUMBER = 3
+    PARTICIPANT = 14
+    RUN_NUMBER = 2
     
     dicts = [] # will be filled
     # Get current timestamp Format: "DD-MM-YYYY_HHMMSS"

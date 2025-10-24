@@ -52,12 +52,13 @@ def browse_svo_file(svo_path, output_folder):
             fx, fy, cx, cy = intrinsics
             # ---------------------gravity direction----------------------
             # In static condition (no motion), -accel ≈ gravity in IMU frame
+
             g_imu = -accel_vec / np.linalg.norm(accel_vec)
             imu_pose = sensordata.get_imu_data().get_pose()
             R = imu_pose.get_rotation_matrix().r
             g_cam = R.T @ g_imu
-            print("Gravity dir (camera frame) from raw accel:", g_cam/np.linalg.norm(g_cam))
-            print("Gravity dir (world frame) from raw accel:", g_imu/np.linalg.norm(g_imu))
+            # print("Gravity dir (camera frame) from raw accel:", g_cam/np.linalg.norm(g_cam))
+            # print("Gravity dir (world frame) from raw accel:", g_imu/np.linalg.norm(g_imu))
             zed.retrieve_image(image, sl.VIEW.LEFT)
             zed.retrieve_measure(depth, sl.MEASURE.DEPTH)
             zed.retrieve_measure(confidence, sl.MEASURE.CONFIDENCE)  # Retrieve confidence map
@@ -78,7 +79,7 @@ def browse_svo_file(svo_path, output_folder):
             Z = 0.4
             u = int(fx * X / Z + x0)
             v = int(fy * Y / Z + y0)
-            print(u,v)
+            # print(u,v)
             # Draw arrow
             cv2.arrowedLine(display, (x0, y0), (u, v), (255, 0, 0), 3, tipLength=0.3)
             cv2.imshow("SVO Browser", display)

@@ -55,7 +55,7 @@ def capture_svo(participant_id, run, bone):
     win_name = "ZED Live"
     import cv2
     cv2.namedWindow(win_name, cv2.WINDOW_NORMAL)
-    print("Press 'd' to start recording 10 frames, 'q' to quit.")
+    print("Press 'd' to start recording 1 frames, 'q' to quit.")
 
     try:
         while True:

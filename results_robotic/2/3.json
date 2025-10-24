@@ -1,0 +1,14 @@
+[
+    {
+        "distance_pca_mm": 120.06378413800441,
+        "distance_weighted_mm": 119.99347978821613,
+        "distance_constrained_mm": 121.96695347558926,
+        "orientation_error_constrained": 0.4515215039378404,
+        "orientation_error_weighted": 1.8638798391146452,
+        "orientation_error_pca": 2.22960366229907,
+        "soft_tissue_penetration_mm_constrained": 1.7937585057393763,
+        "soft_tissue_penetration_mm_weighted": 1.7925081469392303,
+        "soft_tissue_penetration_mm_pca": 1.79996933763475,
+        "timestamp": "20-10-2025_155323"
+    }
+]
