@@ -265,10 +265,21 @@ class SimpleBrushSegmenter:
             cv2.waitKey(1)
 
     def mouse_cb(self, event, x, y, flags, param):
-        if event == cv2.EVENT_LBUTTONDOWN or (flags & cv2.EVENT_FLAG_LBUTTON):
+        if event == cv2.EVENT_LBUTTONDOWN:
+            self.drawing = True
             cv2.circle(self.clone, (x, y), self.brush_radius, (0, 255, 0), -1)
             cv2.circle(self.mask, (x, y), self.brush_radius, 255, -1)
             self.points.append((x, y))
+
+        elif event == cv2.EVENT_MOUSEMOVE:
+            if getattr(self, "drawing", False) and (flags & cv2.EVENT_FLAG_LBUTTON):
+                cv2.circle(self.clone, (x, y), self.brush_radius, (0, 255, 0), -1)
+                cv2.circle(self.mask, (x, y), self.brush_radius, 255, -1)
+                self.points.append((x, y))
+
+        elif event == cv2.EVENT_LBUTTONUP:
+            self.drawing = False
+
 
     def run(self):
         while True:
@@ -486,12 +497,12 @@ if __name__ == "__main__":
     # (TODO: erode edges of mask)
     # MANUAL or ROBOTIC
 
-    manual = True
+    manual = False
     # -----------------------------
     # Parameters
     # -----------------------------
-    PARTICIPANT = 14
-    RUN_NUMBER = 2
+    PARTICIPANT = 25
+    RUN_NUMBER = 3
     
     dicts = [] # will be filled
     # Get current timestamp Format: "DD-MM-YYYY_HHMMSS"

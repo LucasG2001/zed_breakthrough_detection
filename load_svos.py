@@ -1,7 +1,7 @@
 import os
 import numpy as np
 import cv2
-import pyzed.sl as sl
+#import pyzed.sl as sl
 
 def list_svos(data_dir):
     """List all SVO files in the given folder."""
