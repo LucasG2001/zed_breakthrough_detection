@@ -467,7 +467,7 @@ def compute_overshoot(is_manual: bool, file_path, z_threshold=0.25):
         print(f"error to gravity is {error_to_gravity_dir}")
         orientation_errors.append(np.abs(reference_deviation-error_to_gravity_dir)) # compute error via desired deviation - total dev
 
-    visualize_all(points_orig, colors_orig, centroids, directions, pts, projected_constrained)
+    # visualize_all(points_orig, colors_orig, centroids, directions, pts, projected_constrained)
 
     return {"distance_pca_mm": dist_pca,
             "distance_weighted_mm": dist_weighted,
@@ -490,8 +490,8 @@ if __name__ == "__main__":
     # -----------------------------
     # Parameters
     # -----------------------------
-    PARTICIPANT = 14
-    RUN_NUMBER = 2
+    PARTICIPANT = 17
+    RUN_NUMBER = 3
     
     dicts = [] # will be filled
     # Get current timestamp Format: "DD-MM-YYYY_HHMMSS"
