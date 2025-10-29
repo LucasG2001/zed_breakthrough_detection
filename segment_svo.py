@@ -486,18 +486,18 @@ if __name__ == "__main__":
     # (TODO: erode edges of mask)
     # MANUAL or ROBOTIC
 
-    manual = True
+    manual = False
     # -----------------------------
     # Parameters
     # -----------------------------
-    PARTICIPANT = 17
+    PARTICIPANT = 21
     RUN_NUMBER = 3
     
     dicts = [] # will be filled
     # Get current timestamp Format: "DD-MM-YYYY_HHMMSS"
     timestamp_str = datetime.datetime.now().strftime("%d-%m-%Y_%H%M%S")
     
-    # -----------------------------
+    # -----------4.38------------------
     # Manual Drilling
     # -----------------------------
     if manual:
